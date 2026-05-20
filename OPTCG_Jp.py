@@ -8,7 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # CLOUD DATABASE CONNECTION
 # ==============================
 # Replace this placeholder with your exact External Connection String from Render!
-DATABASE_URL = "postgresql://optcg_market_user:WaNZB22PS2F2ZRKliuFsuPbYZMLg9wYS@dpg-d84ssluq1p3s73a64ll0-a.ohio-postgres.render.com/optcg_market"
+import os
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 try:
     conn = psycopg.connect(DATABASE_URL)
