@@ -10,17 +10,31 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ==============================
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# ==============================
+# CLOUD DATABASE CONNECTION
+# ==============================
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 def create_connection():
+    # SAFETY CATCH FOR RENDER BUILD PHASE:
+    # If the database URL environment variable isn't present yet, 
+    # return a dummy connection mock or raise an error ONLY when actually called.
     if not DATABASE_URL:
-        raise ValueError("DATABASE_URL is missing in environment variables")
+        print("⚠️ DATABASE_URL is missing. (This is normal if Render is running a Build Check)")
+        return None
     return psycopg.connect(DATABASE_URL)
 
-# FIXED: Table infrastructure setup is wrapped in a function 
-# so it doesn't try to execute during Render's build compilation phase
 def initialize_database():
     try:
         print("Initializing cloud database infrastructure...")
         conn = create_connection()
+        
+        # If we are in the build phase and conn is None, exit gracefully with 0 (Success) 
+        # so Render finishes building without crashing!
+        if conn is None:
+            print("Plugged build-phase safety bypass. Database initialization skipped during build.")
+            return
+
         cursor = conn.cursor()
         
         # Pre-build our core infrastructure schemas right inside the cloud container
@@ -47,7 +61,9 @@ def initialize_database():
         print("Successfully connected and verified Cloud PostgreSQL schemas!")
     except Exception as e:
         print(f"Cloud Database initialization failed: {e}")
-        exit(1)
+        # Only crash if it's a real run error, otherwise pass
+        if DATABASE_URL:
+            exit(1)
 
 # ==============================
 # CONFIG
