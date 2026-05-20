@@ -207,17 +207,24 @@ if __name__ == "__main__":
     initialize_database()
 
     # ==============================
-    # 2. UPGRADED SET DISCOVERY ENGINE
+    # UPGRADED TARGET SET GENERATOR (OP15 + EB04 + ST30)
     # ==============================
-    print("Detecting available sets dynamically...")
-    SETS = []
-    
-    # Core baseline requirements: Enforce explicit ranges for OP, EB, and ST sets
+    print("Pre-building safety target list for all One Piece TCG sets...")
     baseline_sets = []
-    baseline_sets += [f"op{str(i).zfill(2)}" for i in range(1, 14)] # op01 to op13
-    baseline_sets += [f"eb{str(i).zfill(2)}" for i in range(1, 5)]   # eb01 to eb04
-    baseline_sets += [f"st{str(i).zfill(2)}" for i in range(1, 31)]  # st01 to st30
+    
+    # 1. Main Booster Sets (Now expanded up through OP-15!)
+    baseline_sets += [f"op{str(i).zfill(2)}" for i in range(1, 16)] 
+    
+    # 2. Extra Boosters (EB-01 up through the latest EB-04)
+    baseline_sets += [f"eb{str(i).zfill(2)}" for i in range(1, 5)]   
+    
+    # 3. Starter Decks (From the classic ST-01 up to the current ST-30 flagship releases)
+    baseline_sets += [f"st{str(i).zfill(2)}" for i in range(1, 31)]  
 
+    # ==============================
+    # DYNAMIC AUTO-DETECTION COUPLING
+    # ==============================
+    SETS = []
     try:
         index_response = requests.get(BASE_URL, headers=HEADERS, timeout=15)
         if index_response.status_code == 200:
@@ -231,28 +238,30 @@ if __name__ == "__main__":
                     if set_code.startswith(("op", "st", "eb")):
                         if set_code not in SETS:
                             SETS.append(set_code)
-                            
-        # Merge our required targets into the pool if they were missed by the landing page links
+
+        # Merge baseline overrides into the scraping queue to catch hidden/archived sets safely
         for b_set in baseline_sets:
             if b_set not in SETS:
                 SETS.append(b_set)
 
         SETS.sort()
-        print(f"🎯 Final target queue (Dynamic + Baseline Fallback): {SETS}")
-        print(f"📊 Total sets queued for simultaneous processing: {len(SETS)}")
+        print(f"🎯 Execution Map Verified! Total target sets queued: {len(SETS)}")
+        print(f"📋 Full Target List: {SETS}")
 
     except Exception as e:
-        # Fallback to structural defaults if the Yuyu-tei homepage completely times out
-        print(f"⚠️ Set auto-detection hit an anomaly: {e}. Defaulting to safe core inventory manifest.")
+        print(f"⚠️ Dynamic link engine paused: {e}. Defaulting straight to maximum safe manifests.")
         SETS = baseline_sets
         SETS.sort()
 
-    # 3. Start Multithread Processing Array
-    print("\nStarting multithread scraping...\n")
+    # ==============================
+    # MULTITHREAD EXECUTION RUNNER
+    # ==============================
+    print("\nStarting multithread scraping across all One Piece generations...\n")
     cards_processed = 0
     prices_logged = 0
 
-    with ThreadPoolExecutor(max_workers=3) as executor:  # Kept to 3 to stay safely inside free tier DB connections
+    # Max workers kept at 3 to prevent pool drops on your cloud database instance
+    with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {executor.submit(process_set, set_code): set_code for set_code in SETS}
         for future in as_completed(futures):
             cards, prices = future.result()
@@ -260,7 +269,7 @@ if __name__ == "__main__":
             prices_logged += prices
 
     print("\n=================================")
-    print("MULTITHREAD SCRAPING COMPLETE")
-    print(f"Total Cards Processed: {cards_processed}")
-    print(f"Total Prices Logged: {prices_logged}")
+    print("🚀 MULTITHREAD SCRAPING COMPLETE")
+    print(f"Total Cards Live Updated: {cards_processed}")
+    print(f"Total Price Milestones Tracked: {prices_logged}")
     print("=================================\n")
