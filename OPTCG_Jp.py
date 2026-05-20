@@ -105,10 +105,18 @@ def process_set(set_code):
                 number_element = card.find("span")
                 if not number_element:
                     continue
-                card_number = number_element.text.strip().upper()
+                # Clean text and remove spaces completely
+                raw_number = number_element.text.strip().upper().replace(" ", "")
 
-                if "-" not in card_number:
-                    continue
+                # FIX: Auto-inject hyphens for Starter Decks and Extra Boosters if missing
+                if "-" not in raw_number:
+                    if raw_number.startswith(("OP", "ST", "EB")) and len(raw_number) >= 7:
+                        # Converts OP14001 to OP14-001 or ST01001 to ST01-001
+                        card_number = f"{raw_number[:4]}-{raw_number[4:]}"
+                    else:
+                        continue # Safely skip actual invalid anomalies
+                else:
+                    card_number = raw_number
 
                 price_element = card.find("strong")
                 if not price_element:
