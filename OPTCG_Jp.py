@@ -206,28 +206,46 @@ if __name__ == "__main__":
     # 1. Initialize Tables Safely
     initialize_database()
 
-    # 2. Dynamic Set Discovery Engine
+    # ==============================
+    # 2. UPGRADED SET DISCOVERY ENGINE
+    # ==============================
     print("Detecting available sets dynamically...")
     SETS = []
+    
+    # Core baseline requirements: Enforce explicit ranges for OP, EB, and ST sets
+    baseline_sets = []
+    baseline_sets += [f"op{str(i).zfill(2)}" for i in range(1, 14)] # op01 to op13
+    baseline_sets += [f"eb{str(i).zfill(2)}" for i in range(1, 5)]   # eb01 to eb04
+    baseline_sets += [f"st{str(i).zfill(2)}" for i in range(1, 31)]  # st01 to st30
+
     try:
         index_response = requests.get(BASE_URL, headers=HEADERS, timeout=15)
-        index_soup = BeautifulSoup(index_response.text, "html.parser")
-        all_links = index_soup.find_all("a", href=True)
+        if index_response.status_code == 200:
+            index_soup = BeautifulSoup(index_response.text, "html.parser")
+            all_links = index_soup.find_all("a", href=True)
 
-        for link in all_links:
-            href = link["href"]
-            if "/sell/opc/s/" in href:
-                set_code = href.split("/")[-1].lower()
-                # Dynamically pulls all sets starting with op, st, or eb automatically!
-                if set_code.startswith(("op", "st", "eb")):
-                    if set_code not in SETS:
-                        SETS.append(set_code)
+            for link in all_links:
+                href = link["href"]
+                if "/sell/opc/s/" in href:
+                    set_code = href.split("/")[-1].lower()
+                    if set_code.startswith(("op", "st", "eb")):
+                        if set_code not in SETS:
+                            SETS.append(set_code)
+                            
+        # Merge our required targets into the pool if they were missed by the landing page links
+        for b_set in baseline_sets:
+            if b_set not in SETS:
+                SETS.append(b_set)
 
         SETS.sort()
-        print(f"Detected sets available for execution: {SETS}")
+        print(f"🎯 Final target queue (Dynamic + Baseline Fallback): {SETS}")
+        print(f"📊 Total sets queued for simultaneous processing: {len(SETS)}")
+
     except Exception as e:
-        print(f"Set auto-detection failed: {e}")
-        exit(1)
+        # Fallback to structural defaults if the Yuyu-tei homepage completely times out
+        print(f"⚠️ Set auto-detection hit an anomaly: {e}. Defaulting to safe core inventory manifest.")
+        SETS = baseline_sets
+        SETS.sort()
 
     # 3. Start Multithread Processing Array
     print("\nStarting multithread scraping...\n")
