@@ -116,25 +116,26 @@ def process_set(set_code):
                 price_text = price_element.text.strip()
                 price_jpy = int("".join(filter(str.isdigit, price_text)))
 
-                # 4. FIX: TARGET ONLY THE GENUINE CARD IMAGES (Bypasses the Favorite Star SVG)
+                # 4. FIX: TARGET ONLY GENUINE IMAGES USING LINK ANCHORS
                 img_url = ""
                 alt_text = ""
                 
-                # Specifically search inside the product image frame wrapper class
-                img_container = card.find("div", class_="product-img")
-                img_tag = img_container.find("img") if img_container else card.find("img", alt=True)
+                # Directly find the <a> link wrapping the product image div
+                img_link = card.find("a", href=lambda h: h and "/sell/opc/card/" in h)
+                if img_link:
+                    img_tag = img_link.find("img")
+                    if img_tag and img_tag.has_attr("src"):
+                        src_url = img_tag["src"]
+                        alt_text = img_tag.get("alt", "").strip().upper()
+                        
+                        # Build out the full domain URL path
+                        if src_url.startswith("http"):
+                            img_url = src_url
+                        else:
+                            img_url = f"https://card.yuyu-tei.jp{src_url}" if src_url.startswith("/") else f"https://{src_url}"
                 
-                # Double check to prevent capturing favorite/bookmark system svgs
-                if img_tag and img_tag.has_attr("src") and "star.svg" not in img_tag["src"]:
-                    src_url = img_tag["src"]
-                    alt_text = img_tag.get("alt", "").strip().upper()
-                    if src_url.startswith("http"):
-                        img_url = src_url
-                    else:
-                        img_url = f"https://card.yuyu-tei.jp{src_url}" if src_url.startswith("/") else f"https://{src_url}"
-                
-                # Image link builder fallback from detail links if the product is temporarily out-of-stock
-                if not img_url or "star.svg" in img_url:
+                # Image link builder fallback from detail links if the product layout is completely missing an image tag
+                if not img_url:
                     link_element = card.find("a", href=True)
                     if link_element:
                         detail_url = link_element["href"]
