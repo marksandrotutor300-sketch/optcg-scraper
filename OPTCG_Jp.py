@@ -120,7 +120,7 @@ def process_set(set_code):
                 img_url = ""
                 alt_text = ""
                 
-                # Directly find the <a> link wrapping the product image div
+                # Target the absolute item wrapper linking straight out to product details
                 img_link = card.find("a", href=lambda h: h and "/sell/opc/card/" in h)
                 if img_link:
                     img_tag = img_link.find("img")
@@ -128,13 +128,16 @@ def process_set(set_code):
                         src_url = img_tag["src"]
                         alt_text = img_tag.get("alt", "").strip().upper()
                         
-                        # Build out the full domain URL path
+                        # Swap low-resolution 100_140 thumbnail tags with full scale 'front' targets
+                        if "100_140" in src_url:
+                            src_url = src_url.replace("100_140", "front")
+                        
                         if src_url.startswith("http"):
                             img_url = src_url
                         else:
                             img_url = f"https://card.yuyu-tei.jp{src_url}" if src_url.startswith("/") else f"https://{src_url}"
                 
-                # Image link builder fallback from detail links if the product layout is completely missing an image tag
+                # High-res structural builder fallback if the listing has blank layout images
                 if not img_url:
                     link_element = card.find("a", href=True)
                     if link_element:
