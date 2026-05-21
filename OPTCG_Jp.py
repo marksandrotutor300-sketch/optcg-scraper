@@ -204,18 +204,39 @@ def process_set(set_code):
                     if context_rarity in ["SEC", "SR", "R", "UC", "C"]:
                         context_rarity = f"P-{context_rarity}"
 
-                # 5. Generate Unique Keys
-                if chase_variant:
-                    unique_card_id = f"{card_number}_{context_rarity}{chase_variant}"
-                else:
-                    unique_card_id = f"{card_number}_{context_rarity}"
+                # =========================================================
+                # 🛠️ 5. DYNAMIC HIGH-RES IMAGE ID DISAMBIGUATION KEY GENERATOR
+                # =========================================================
+                # Extract YuYu-Tei's unique asset ID integer from the image URL filename
+                # Example: https://card.yuyu-tei.jp/opc/front/op13/10152.jpg -> 10152
+                image_asset_id = ""
+                if img_url:
+                    try:
+                        image_asset_id = f"_{img_url.split('/')[-1].split('.')[0]}"
+                    except Exception:
+                        image_asset_id = ""
 
-                # Disambiguate baseline P-SEC from manga listings using filename endpoints
-                if context_rarity == "P-SEC" and not chase_variant:
-                    if img_url and ("10153" in img_url or "10154" in img_url):
-                        pass 
-                    else:
-                        unique_card_id = f"{card_number}_P-SEC"
+                # Append special variant labels for clarity based on text keywords
+                if "手配書" in combined_text or "WANTED" in combined_text:
+                    chase_variant = "_WANTED"
+                    context_rarity = "SP"
+                elif "レッド" in combined_text or "RED" in combined_text:
+                    chase_variant = "_RED_MANGA"
+                    context_rarity = "P-SEC"
+                elif "スーパーパラレル" in combined_text or "SUPER" in combined_text or "コミック" in combined_text or "原作" in combined_text:
+                    chase_variant = "_MANGA"
+                    context_rarity = "P-SEC"
+                else:
+                    chase_variant = ""
+
+                # Auto-append parallel tags to common base card values missing the explicit prefix
+                if "パラレル" in combined_text and "P-" not in context_rarity and context_rarity not in ["SP", "L", "P-L"]:
+                    if context_rarity in ["SEC", "SR", "R", "UC", "C"]:
+                        context_rarity = f"P-{context_rarity}"
+
+                # Generate a globally unique ID using the base properties and the unique asset id
+                # Results in clean keys like: OP05-119_SP_10034, OP05-119_SP_WANTED_10035
+                unique_card_id = f"{card_number}_{context_rarity}{chase_variant}{image_asset_id}"
 
                 origin_set = card_number.split("-")[0].strip()
                 market_set = set_code.upper().strip()
