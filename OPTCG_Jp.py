@@ -136,43 +136,62 @@ def process_set(set_code):
 
                 rarity = "UNKNOWN"
                 is_parallel = 0
+                chase_variant = ""
 
                 img_tag = card.find("img")
                 if img_tag and img_tag.has_attr("alt"):
                     alt_text = img_tag["alt"].strip().upper()
 
+                    # 1. Detect Parallel Treatment
                     if "パラレル" in alt_text:
                         is_parallel = 1
 
-                    for explicit_rarity in ["P-SEC", "P-SR", "SP"]:
-                        if explicit_rarity in alt_text:
-                            rarity = explicit_rarity
-                            break
+                    # 2. Extract Base Rarity
+                    if "P-SEC" in alt_text:
+                        rarity = "P-SEC"
+                    elif "P-SR" in alt_text:
+                        rarity = "P-SR"
+                    elif "SP" in alt_text:
+                        rarity = "SP"
+                    elif "SEC" in alt_text:
+                        rarity = "SEC"
+                    elif "SR" in alt_text:
+                        rarity = "SR"
+                    elif "UC" in alt_text:
+                        rarity = "UC"
+                    elif "R" in alt_text:
+                        rarity = "R"
+                    elif "C" in alt_text:
+                        rarity = "C"
+                    elif "L" in alt_text:
+                        rarity = "L"
+                    elif "P" in alt_text:
+                        rarity = "P"
 
-                    if rarity == "UNKNOWN":
-                        if "SEC" in alt_text:
-                            rarity = "SEC"
-                        elif "SR" in alt_text:
-                            rarity = "SR"
-                        elif "UC" in alt_text:
-                            rarity = "UC"
-                        elif "R" in alt_text:
-                            rarity = "R"
-                        elif "C" in alt_text:
-                            rarity = "C"
-                        elif "L" in alt_text:
-                            rarity = "L"
-                        elif "P" in alt_text:
-                            rarity = "P"
+                    # 3. ADVANCED JPN TEXT MATCHING FOR MANGA & SPECIAL VARIANTS
+                    # Detects standard Comic/Manga background
+                    if "コミック" in alt_text or "原作" in alt_text:
+                        chase_variant = "_MANGA"
+                    
+                    # Detects Red background variations specifically (赤 = Red)
+                    if "赤" in alt_text or "RED" in alt_text:
+                        chase_variant = "_RED_MANGA"
+                    
+                    # Detects other special anniversary/event frames if applicable
+                    elif "周年" in alt_text or "ANNIVERSARY" in alt_text:
+                        chase_variant = "_ANNIV"
 
-                if is_parallel:
+                # 4. Finalize Identity Strings cleanly
+                if is_parallel and "P-" not in rarity and "SP" not in rarity:
                     rarity += "_PARALLEL"
 
-                origin_set = card_number.split("-")[0]
-                market_set = set_code.upper()
+                # If a special chase variant was flagged, append it onto our key!
+                if chase_variant:
+                    unique_card_id = f"{card_number}_{rarity}{chase_variant}"
+                else:
+                    unique_card_id = f"{card_number}_{rarity}"
 
-                unique_card_id = f"{card_number}_{rarity}"
-
+                # 1. Store the unique card details (Unique to the physical card cardnumber + rarity)
                 cursor.execute("""
                     INSERT INTO Cards 
                     (UniqueCardId, CardNumber, CardName, Rarity, SetId, ImageUrl)
@@ -183,6 +202,7 @@ def process_set(set_code):
                         ImageUrl = EXCLUDED.ImageUrl;
                 """, (unique_card_id, card_number, card_name, rarity, origin_set, img_url))
 
+                # 2. Store the price under the current Market Set list page it was found on!
                 cursor.execute("""
                     INSERT INTO PriceHistory
                     (UniqueCardId, MarketSet, PriceJPY, RecordedDate)
