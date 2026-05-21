@@ -84,9 +84,146 @@ def process_set(set_code):
             return 0, 0
 
         soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Yuyu-tei groups cards under header blocks like <h3 class="title">SEC Card List</h3>
+        # We will loop through the category sections directly to get correct base rarities!
+        sections = soup.find_all(["h3", "h4"], class_="title")
+        if not sections:
+            # Fallback if text layout differs
+            sections = soup.find_all("div", class_="sub-box")
+
+        # Let's search the full page with high precision
         card_boxes = soup.find_all("div", class_="card-product")
 
         for card in card_boxes:
+            try:
+                title_element = card.find("h4", class_="text-primary")
+                if not title_element:
+                    continue
+                card_name = title_element.text.strip()
+
+                number_element = card.find("span")
+                if not number_element:
+                    continue
+                raw_number = number_element.text.strip().upper().replace(" ", "")
+
+                if "-" not in raw_number:
+                    if raw_number.startswith(("OP", "ST", "EB")) and len(raw_number) >= 7:
+                        card_number = f"{raw_number[:4]}-{raw_number[4:]}"
+                    else:
+                        continue 
+                else:
+                    card_number = raw_number
+
+                price_element = card.find("strong")
+                if not price_element:
+                    continue
+                price_text = price_element.text.strip()
+                price_jpy = int("".join(filter(str.isdigit, price_text)))
+
+                img_url = ""
+                link_element = card.find("a", href=True)
+                if link_element:
+                    detail_url = link_element["href"]
+                    parts = detail_url.strip("/").split("/")
+                    if len(parts) >= 5:
+                        set_code_img = parts[-2]
+                        image_id = parts[-1]
+                        img_url = f"https://card.yuyu-tei.jp/opc/front/{set_code_img}/{image_id}.jpg"
+
+                # =========================================================
+                # 🛠️ FIXED HIGH-PRECISION VARIANT PARSER
+                # =========================================================
+                rarity = "SEC" # Default fallback for secret rare block drops
+                chase_variant = ""
+                
+                # Check the closest group section header above this card box to find the exact list it belongs to
+                parent_section = card.find_parent("div", class_="card-list-box")
+                section_text = ""
+                if parent_section:
+                    header = parent_section.find(["h3", "h4", "h5"])
+                    if header:
+                        section_text = header.text.strip().upper()
+
+                # 1. Evaluate True Base List Rarity 
+                if "P-SEC" in section_text:
+                    rarity = "P-SEC"
+                elif "SP" in section_text or "SP CARD" in section_text:
+                    rarity = "SP"
+                elif "SEC" in section_text:
+                    rarity = "SEC"
+                elif "P-SR" in section_text:
+                    rarity = "P-SR"
+                elif "SR" in section_text:
+                    rarity = "SR"
+                elif "P-R" in section_text:
+                    rarity = "P-R"
+                elif "R" in section_text:
+                    rarity = "R"
+                elif "UC" in section_text:
+                    rarity = "UC"
+                elif "C" in section_text:
+                    rarity = "C"
+                elif "L" in section_text:
+                    rarity = "L"
+
+                # 2. Check Alt-Text for specific chase styles (Manga / Wanted Poster / Red)
+                img_tag = card.find("img")
+                if img_tag and img_tag.has_attr("alt"):
+                    alt_text = img_tag["alt"].strip().upper()
+                    
+                    # Detect Wanted Poster style frames (手配書 = Wanted Poster)
+                    if "手配書" in alt_text or "WANTED" in alt_text:
+                        chase_variant = "_WANTED"
+                    
+                    # Detect Red Super Parallel (レッドスーパーパラレル)
+                    elif "レッド" in alt_text or "RED" in alt_text:
+                        chase_variant = "_RED_MANGA"
+                        rarity = "P-SEC"
+                        
+                    # Detect Standard Super Parallel Manga (スーパーパラレル)
+                    elif "スーパーパラレル" in alt_text or "SUPER" in alt_text or "コミック" in alt_text:
+                        chase_variant = "_MANGA"
+                        rarity = "P-SEC"
+                        
+                    # Detect regular Alternate Arts if inside a Parallel block but not manga
+                    elif "パラレル" in alt_text and not chase_variant and rarity == "SEC":
+                        rarity = "P-SEC"
+
+                # 3. Create completely isolated, non-colliding primary keys!
+                if chase_variant:
+                    unique_card_id = f"{card_number}_{rarity}{chase_variant}"
+                else:
+                    unique_card_id = f"{card_number}_{rarity}"
+
+                origin_set = card_number.split("-")[0].strip()
+                market_set = set_code.upper().strip()
+
+                # Write to Database
+                cursor.execute("""
+                    INSERT INTO Cards 
+                    (UniqueCardId, CardNumber, CardName, Rarity, SetId, ImageUrl)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (UniqueCardId)
+                    DO UPDATE SET
+                        CardName = EXCLUDED.CardName,
+                        ImageUrl = EXCLUDED.ImageUrl;
+                """, (unique_card_id, card_number, card_name, rarity, origin_set, img_url))
+
+                cursor.execute("""
+                    INSERT INTO PriceHistory
+                    (UniqueCardId, MarketSet, PriceJPY, RecordedDate)
+                    VALUES (%s, %s, %s, CURRENT_DATE)
+                    ON CONFLICT (UniqueCardId, MarketSet, RecordedDate)
+                    DO UPDATE SET PriceJPY = EXCLUDED.PriceJPY;
+                """, (unique_card_id, market_set, price_jpy))
+
+                local_cards += 1
+                local_prices += 1
+
+            except Exception as e:
+                continue
+            
             try:
                 title_element = card.find("h4", class_="text-primary")
                 if not title_element:
