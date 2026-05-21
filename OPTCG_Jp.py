@@ -116,18 +116,25 @@ def process_set(set_code):
                 price_text = price_element.text.strip()
                 price_jpy = int("".join(filter(str.isdigit, price_text)))
 
-                # 4. DIRECT IMAGE EXTRACTOR FIX (Extracts the precise live source)
+                # 4. FIX: TARGET ONLY THE GENUINE CARD IMAGES (Bypasses the Favorite Star SVG)
                 img_url = ""
-                img_tag = card.find("img")
-                if img_tag and img_tag.has_attr("src"):
+                alt_text = ""
+                
+                # Specifically search inside the product image frame wrapper class
+                img_container = card.find("div", class_="product-img")
+                img_tag = img_container.find("img") if img_container else card.find("img", alt=True)
+                
+                # Double check to prevent capturing favorite/bookmark system svgs
+                if img_tag and img_tag.has_attr("src") and "star.svg" not in img_tag["src"]:
                     src_url = img_tag["src"]
+                    alt_text = img_tag.get("alt", "").strip().upper()
                     if src_url.startswith("http"):
                         img_url = src_url
                     else:
                         img_url = f"https://card.yuyu-tei.jp{src_url}" if src_url.startswith("/") else f"https://{src_url}"
                 
-                # Alternate image tracking fallback from detail links if layout is missing images
-                if not img_url:
+                # Image link builder fallback from detail links if the product is temporarily out-of-stock
+                if not img_url or "star.svg" in img_url:
                     link_element = card.find("a", href=True)
                     if link_element:
                         detail_url = link_element["href"]
@@ -135,20 +142,19 @@ def process_set(set_code):
                         if len(parts) >= 5:
                             set_code_img = parts[-2]
                             image_id = parts[-1]
-                            img_url = f"https://card.yuyu-tei.jp/opc/100_140/{set_code_img}/{image_id}.jpg"
+                            img_url = f"https://card.yuyu-tei.jp/opc/front/{set_code_img}/{image_id}.jpg"
 
                 # =========================================================
-                # 🛠️ HARD-CODED ACCURATE RARITY & CHASE IDENTIFIER
+                # 🛠️ CONTEXTUAL RARITY IDENTIFIER ENGINE
                 # =========================================================
                 context_rarity = ""
                 chase_variant = ""
 
-                # Step A: Parse raw image ALT tags first (Most reliable variant data source)
-                alt_text = img_tag["alt"].strip().upper() if (img_tag and img_tag.has_attr("alt")) else ""
-                combined_text = f"{card_name.upper()} {alt_text}"
+                # Build full string context out of everything available inside this block
+                combined_text = f"{card_name.upper()} {alt_text} {card.text.upper()}"
 
-                # Match out the explicit base text labels out of the image metadata
-                if "P-L" in combined_text or "P-L" in card.text:
+                # Strategy A: Scan for exact label markers
+                if "P-L" in combined_text or "P-LEADER" in combined_text:
                     context_rarity = "P-L"
                 elif "P-SEC" in combined_text:
                     context_rarity = "P-SEC"
@@ -162,21 +168,23 @@ def process_set(set_code):
                     context_rarity = "P-R"
                 elif "R" in combined_text:
                     context_rarity = "R"
-                elif "L" in combined_text or "L" in card.text:
+                elif "L" in combined_text or "LEADER" in combined_text:
                     context_rarity = "L"
 
-                # Step B: Fallback to cross-section structural checks if alt strings are empty
-                if not context_rarity:
+                # Strategy B: Fall back to checking parent header blocks (Standard Set Lists)
+                if not context_rarity or context_rarity in ["C", "UNKNOWN"]:
                     parent_section = card.find_parent("div", class_="card-list-box")
                     if parent_section:
                         header = parent_section.find(["h3", "h4", "h5", "div"], class_="title")
                         if header:
-                            context_rarity = header.text.strip().replace("CARD LIST", "").replace(" ", "").upper()
+                            header_clean = header.text.strip().replace("CARD LIST", "").replace(" ", "").upper()
+                            if header_clean:
+                                context_rarity = header_clean
 
                 if not context_rarity:
-                    context_rarity = "C" # Clean baseline uniform fallback
+                    context_rarity = "C"
 
-                # Step C: Extract Specific High-End Variant Flags
+                # Strategy C: Separate High-Value Special Variants
                 if "手配書" in combined_text or "WANTED" in combined_text:
                     chase_variant = "_WANTED"
                     context_rarity = "SP"
@@ -187,28 +195,28 @@ def process_set(set_code):
                     chase_variant = "_MANGA"
                     context_rarity = "P-SEC"
 
-                # Standardize alternative art tags if a generic parallel string is tracked
+                # Fix up baseline parallels (e.g. R to P-R) if missing the explicit prefix
                 if "パラレル" in combined_text and "P-" not in context_rarity and context_rarity not in ["SP", "L", "P-L"]:
                     if context_rarity in ["SEC", "SR", "R", "UC", "C"]:
                         context_rarity = f"P-{context_rarity}"
 
-                # 5. Build Bulletproof Non-Colliding ID Keys
+                # 5. Generate Unique Keys
                 if chase_variant:
                     unique_card_id = f"{card_number}_{context_rarity}{chase_variant}"
                 else:
                     unique_card_id = f"{card_number}_{context_rarity}"
 
-                # Identify if it's the normal P-SEC variation vs Manga/Red variants
+                # Disambiguate baseline P-SEC from manga listings using filename endpoints
                 if context_rarity == "P-SEC" and not chase_variant:
                     if img_url and ("10153" in img_url or "10154" in img_url):
-                        pass # Let the dedicated manga loops handle this
+                        pass 
                     else:
                         unique_card_id = f"{card_number}_P-SEC"
 
                 origin_set = card_number.split("-")[0].strip()
                 market_set = set_code.upper().strip()
 
-                # 6. Execute Clean Database Updates
+                # 6. Database Transaction Commit Pipeline
                 cursor.execute("""
                     INSERT INTO Cards 
                     (UniqueCardId, CardNumber, CardName, Rarity, SetId, ImageUrl)
@@ -243,7 +251,7 @@ def process_set(set_code):
     except Exception as e:
         print(f"Thread failed for set {set_code}: {e}")
         return 0, 0
-      
+        
 # ==============================
 # MAIN RUNNER EXECUTION 
 # ==============================
