@@ -80,33 +80,31 @@ def process_set(set_code):
         response = requests.get(url, headers=HEADERS, timeout=15)
 
         if response.status_code != 200:
-            print(f"Skipping {url} (Status {response.status_code})")
+            print(f"Skiipping {url} (Status {response.status_code})")
             return 0, 0
 
         soup = BeautifulSoup(response.text, "html.parser")
-        
-        # Yuyu-tei groups cards under header blocks like <h3 class="title">SEC Card List</h3>
-        # We will loop through the category sections directly to get correct base rarities!
-        sections = soup.find_all(["h3", "h4"], class_="title")
-        if not sections:
-            # Fallback if text layout differs
-            sections = soup.find_all("div", class_="sub-box")
-
-        # Let's search the full page with high precision
         card_boxes = soup.find_all("div", class_="card-product")
 
         for card in card_boxes:
             try:
+                # 1. Extract Card Name (Always inside h4 text-primary)
                 title_element = card.find("h4", class_="text-primary")
                 if not title_element:
                     continue
                 card_name = title_element.text.strip()
 
-                number_element = card.find("span")
+                # 2. Extract Card Number (Look for the centered border-dark block text)
+                number_element = card.find("span", class_="border-dark")
                 if not number_element:
-                    continue
+                    # Fallback to general span search if layout shifts
+                    number_element = card.find("span")
+                    if not number_element or "-" not in number_element.text:
+                        continue
+                
                 raw_number = number_element.text.strip().upper().replace(" ", "")
-
+                
+                # Normalize format to always use hyphens (e.g., EB01-001)
                 if "-" not in raw_number:
                     if raw_number.startswith(("OP", "ST", "EB")) and len(raw_number) >= 7:
                         card_number = f"{raw_number[:4]}-{raw_number[4:]}"
@@ -115,12 +113,14 @@ def process_set(set_code):
                 else:
                     card_number = raw_number
 
+                # 3. Extract Price (Find the strong tag safely anywhere inside the card block)
                 price_element = card.find("strong")
                 if not price_element:
                     continue
                 price_text = price_element.text.strip()
                 price_jpy = int("".join(filter(str.isdigit, price_text)))
 
+                # 4. Extract Image URL Layout
                 img_url = ""
                 link_element = card.find("a", href=True)
                 if link_element:
@@ -132,74 +132,48 @@ def process_set(set_code):
                         img_url = f"https://card.yuyu-tei.jp/opc/front/{set_code_img}/{image_id}.jpg"
 
                 # =========================================================
-                # 🛠️ FIXED HIGH-PRECISION VARIANT PARSER
+                # 🛠️ EXPLICIT FIELD DATA LOGIC 
                 # =========================================================
-                rarity = "SEC" # Default fallback for secret rare block drops
+                rarity = "UNKNOWN"
                 chase_variant = ""
+
+                # Target the exact badge wrapper text (e.g., P-L, L, SEC, P-SEC)
+                rarity_span = card.find("span", class_="text-white")
+                if rarity_span:
+                    rarity = rarity_span.text.strip().upper()
                 
-                # Check the closest group section header above this card box to find the exact list it belongs to
-                parent_section = card.find_parent("div", class_="card-list-box")
-                section_text = ""
-                if parent_section:
-                    header = parent_section.find(["h3", "h4", "h5"])
-                    if header:
-                        section_text = header.text.strip().upper()
-
-                # 1. Evaluate True Base List Rarity 
-                if "P-SEC" in section_text:
-                    rarity = "P-SEC"
-                elif "SP" in section_text or "SP CARD" in section_text:
-                    rarity = "SP"
-                elif "SEC" in section_text:
-                    rarity = "SEC"
-                elif "P-SR" in section_text:
-                    rarity = "P-SR"
-                elif "SR" in section_text:
-                    rarity = "SR"
-                elif "P-R" in section_text:
-                    rarity = "P-R"
-                elif "R" in section_text:
-                    rarity = "R"
-                elif "UC" in section_text:
-                    rarity = "UC"
-                elif "C" in section_text:
-                    rarity = "C"
-                elif "L" in section_text:
-                    rarity = "L"
-
-                # 2. Check Alt-Text for specific chase styles (Manga / Wanted Poster / Red)
+                # Check Card Name and Image Alt text for Manga/Special Chase tags
                 img_tag = card.find("img")
-                if img_tag and img_tag.has_attr("alt"):
-                    alt_text = img_tag["alt"].strip().upper()
-                    
-                    # Detect Wanted Poster style frames (手配書 = Wanted Poster)
-                    if "手配書" in alt_text or "WANTED" in alt_text:
-                        chase_variant = "_WANTED"
-                    
-                    # Detect Red Super Parallel (レッドスーパーパラレル)
-                    elif "レッド" in alt_text or "RED" in alt_text:
-                        chase_variant = "_RED_MANGA"
-                        rarity = "P-SEC"
-                        
-                    # Detect Standard Super Parallel Manga (スーパーパラレル)
-                    elif "スーパーパラレル" in alt_text or "SUPER" in alt_text or "コミック" in alt_text:
-                        chase_variant = "_MANGA"
-                        rarity = "P-SEC"
-                        
-                    # Detect regular Alternate Arts if inside a Parallel block but not manga
-                    elif "パラレル" in alt_text and not chase_variant and rarity == "SEC":
-                        rarity = "P-SEC"
+                alt_text = img_tag["alt"].strip().upper() if (img_tag and img_tag.has_attr("alt")) else ""
+                combined_text = f"{card_name.upper()} {alt_text}"
 
-                # 3. Create completely isolated, non-colliding primary keys!
+                # Isolate High-Value Super Parallel Chase variations safely
+                if "手配書" in combined_text or "WANTED" in combined_text:
+                    chase_variant = "_WANTED"
+                    rarity = "SP"
+                elif "レッド" in combined_text or "RED" in combined_text:
+                    chase_variant = "_RED_MANGA"
+                    rarity = "P-SEC"
+                elif "スーパーパラレル" in combined_text or "SUPER" in combined_text or "コミック" in combined_text or "原作" in combined_text:
+                    chase_variant = "_MANGA"
+                    rarity = "P-SEC"
+
+                # 5. Build Bulletproof Non-Colliding ID Keys
                 if chase_variant:
                     unique_card_id = f"{card_number}_{rarity}{chase_variant}"
                 else:
                     unique_card_id = f"{card_number}_{rarity}"
 
+                # If it's a generic secondary Alternate Art sharing a common parallel rarity key
+                if img_url:
+                    img_id = img_url.split("/")[-1].split(".")[0]
+                    if "P-" in rarity and not chase_variant and not img_id.endswith("101") and not img_id.endswith("100"):
+                        unique_card_id = f"{card_number}_{rarity}_ALT"
+
                 origin_set = card_number.split("-")[0].strip()
                 market_set = set_code.upper().strip()
 
-                # Write to Database
+                # 6. Push Verified Row Elements to Database
                 cursor.execute("""
                     INSERT INTO Cards 
                     (UniqueCardId, CardNumber, CardName, Rarity, SetId, ImageUrl)
@@ -207,7 +181,8 @@ def process_set(set_code):
                     ON CONFLICT (UniqueCardId)
                     DO UPDATE SET
                         CardName = EXCLUDED.CardName,
-                        ImageUrl = EXCLUDED.ImageUrl;
+                        ImageUrl = EXCLUDED.ImageUrl,
+                        Rarity = EXCLUDED.Rarity;
                 """, (unique_card_id, card_number, card_name, rarity, origin_set, img_url))
 
                 cursor.execute("""
@@ -233,16 +208,14 @@ def process_set(set_code):
                 number_element = card.find("span")
                 if not number_element:
                     continue
-                # Clean text and remove spaces completely
                 raw_number = number_element.text.strip().upper().replace(" ", "")
 
-                # FIX: Auto-inject hyphens for Starter Decks and Extra Boosters if missing
+                # Uniform hyphen processing
                 if "-" not in raw_number:
                     if raw_number.startswith(("OP", "ST", "EB")) and len(raw_number) >= 7:
-                        # Converts OP14001 to OP14-001 or ST01001 to ST01-001
                         card_number = f"{raw_number[:4]}-{raw_number[4:]}"
                     else:
-                        continue # Safely skip actual invalid anomalies
+                        continue 
                 else:
                     card_number = raw_number
 
@@ -262,63 +235,66 @@ def process_set(set_code):
                         image_id = parts[-1]
                         img_url = f"https://card.yuyu-tei.jp/opc/front/{set_code_img}/{image_id}.jpg"
 
-                rarity = "UNKNOWN"
-                is_parallel = 0
+                # =========================================================
+                # 🛠️ ULTRA-PRECISE VARIANT & RARITY EXTRACTOR
+                # =========================================================
+                rarity = "C"  # Baseline fallback
                 chase_variant = ""
 
+                # 1. Target the exact HTML rarity badge element used by YuYu-Tei
+                rarity_element = card.find("em", class_="rarity")
+                if rarity_element:
+                    rarity = rarity_element.text.strip().upper()
+                else:
+                    # Alternative check if the wrapper contains rarity class selectors
+                    card_classes = card.get("class", [])
+                    for cls in card_classes:
+                        if cls.startswith("rarity-"):
+                            rarity = cls.split("-")[-1].upper()
+
+                # 2. Check Image Alt Tags for Parallel Types and Special Chases
                 img_tag = card.find("img")
                 if img_tag and img_tag.has_attr("alt"):
                     alt_text = img_tag["alt"].strip().upper()
 
-                    # 1. Detect Parallel Treatment
-                    if "パラレル" in alt_text:
-                        is_parallel = 1
-
-                    # 2. Extract Base Rarity
-                    if "P-SEC" in alt_text:
-                        rarity = "P-SEC"
-                    elif "P-SR" in alt_text:
-                        rarity = "P-SR"
-                    elif "SP" in alt_text:
+                    # Detect Wanted Poster style frames (手配書 / WANTED)
+                    if "手配書" in alt_text or "WANTED" in alt_text:
+                        chase_variant = "_WANTED"
                         rarity = "SP"
-                    elif "SEC" in alt_text:
-                        rarity = "SEC"
-                    elif "SR" in alt_text:
-                        rarity = "SR"
-                    elif "UC" in alt_text:
-                        rarity = "UC"
-                    elif "R" in alt_text:
-                        rarity = "R"
-                    elif "C" in alt_text:
-                        rarity = "C"
-                    elif "L" in alt_text:
-                        rarity = "L"
-                    elif "P" in alt_text:
-                        rarity = "P"
 
-                    # 3. ADVANCED JPN TEXT MATCHING FOR MANGA & SPECIAL VARIANTS
-                    if "コミック" in alt_text or "原作" in alt_text:
-                        chase_variant = "_MANGA"
-                    
-                    if "赤" in alt_text or "RED" in alt_text:
+                    # Detect Red Super Parallel (レッドスーパーパラレル / 赤)
+                    elif "レッド" in alt_text or "RED" in alt_text:
                         chase_variant = "_RED_MANGA"
-                    elif "周年" in alt_text or "ANNIVERSARY" in alt_text:
-                        chase_variant = "_ANNIV"
+                        rarity = "P-SEC"
 
-                # 4. Finalize Identity Strings cleanly
-                if is_parallel and "P-" not in rarity and "SP" not in rarity:
-                    rarity += "_PARALLEL"
+                    # Detect Standard Super Parallel Manga (スーパーパラレル / コミック / 原作)
+                    elif "スーパーパラレル" in alt_text or "SUPER" in alt_text or "コミック" in alt_text or "原作" in alt_text:
+                        chase_variant = "_MANGA"
+                        rarity = "P-SEC"
 
+                    # Standardize parallel indicator notation
+                    elif "パラレル" in alt_text and "P-" not in rarity and "SP" not in rarity:
+                        if rarity in ["SEC", "SR", "R", "UC", "C", "L"]:
+                            rarity = f"P-{rarity}"
+                        else:
+                            rarity += "_PARALLEL"
+
+                # 3. Handle specific Alt Art separations that share the generic P-SEC tag
                 if chase_variant:
                     unique_card_id = f"{card_number}_{rarity}{chase_variant}"
                 else:
                     unique_card_id = f"{card_number}_{rarity}"
 
-                # FIX: Explicitly define origin_set and market_set before SQL executions
+                if img_url:
+                    img_id = img_url.split("/")[-1].split(".")[0]
+                    # If it's an alternate art sharing the base P-SEC code without being manga, suffix it
+                    if rarity == "P-SEC" and not chase_variant and not img_id.endswith("101"):
+                        unique_card_id = f"{card_number}_{rarity}_ALT"
+
                 origin_set = card_number.split("-")[0].strip()
                 market_set = set_code.upper().strip()
 
-                # 1. Store the unique card details
+                # 1. Store the unique card details safely
                 cursor.execute("""
                     INSERT INTO Cards 
                     (UniqueCardId, CardNumber, CardName, Rarity, SetId, ImageUrl)
@@ -326,10 +302,11 @@ def process_set(set_code):
                     ON CONFLICT (UniqueCardId)
                     DO UPDATE SET
                         CardName = EXCLUDED.CardName,
-                        ImageUrl = EXCLUDED.ImageUrl;
+                        ImageUrl = EXCLUDED.ImageUrl,
+                        Rarity = EXCLUDED.Rarity;
                 """, (unique_card_id, card_number, card_name, rarity, origin_set, img_url))
 
-                # 2. Store the price under the current Market Set list page
+                # 2. Store the pricing tracking log
                 cursor.execute("""
                     INSERT INTO PriceHistory
                     (UniqueCardId, MarketSet, PriceJPY, RecordedDate)
@@ -342,8 +319,6 @@ def process_set(set_code):
                 local_prices += 1
 
             except Exception as e:
-                # Useful to keep an internal log stream during development anomalies
-                # print(f"Card error: {e}")
                 continue
 
         conn.commit()
@@ -360,24 +335,16 @@ def process_set(set_code):
 # MAIN RUNNER EXECUTION 
 # ==============================
 if __name__ == "__main__":
-    # 1. Initialize Tables Safely
     initialize_database()
 
     print("Pre-building safety target list for all One Piece TCG sets...")
     baseline_sets = []
     
-    # 1. Main Booster Sets (OP-01 through OP-15)
     baseline_sets += [f"op{str(i).zfill(2)}" for i in range(1, 16)] 
-    
-    # 2. Extra Boosters (EB-01 through EB-04)
     baseline_sets += [f"eb{str(i).zfill(2)}" for i in range(1, 5)]   
-    
-    # 3. Starter Decks (ST-01 through ST-30)
     baseline_sets += [f"st{str(i).zfill(2)}" for i in range(1, 31)]  
 
-    # ==============================
     # DYNAMIC AUTO-DETECTION COUPLING
-    # ==============================
     SETS = []
     try:
         index_response = requests.get(BASE_URL, headers=HEADERS, timeout=15)
@@ -406,9 +373,6 @@ if __name__ == "__main__":
         SETS = baseline_sets
         SETS.sort()
 
-    # ==============================
-    # MULTITHREAD EXECUTION RUNNER
-    # ==============================
     print("\nStarting multithread scraping across all One Piece generations...\n")
     cards_processed = 0
     prices_logged = 0
