@@ -69,42 +69,40 @@ def process_set(set_code):
     local_prices = 0
 
     try:
-        # Each thread requests its own unique DB connection
         conn = create_connection()
         cursor = conn.cursor()
 
         print(f"Processing set: {set_code.upper()}")
-        time.sleep(0.5)  # Gentle pacing cushion to prevent rate limiting
+        time.sleep(0.5)  # Safe delay cushion
 
         url = f"{BASE_URL}{set_code}"
         response = requests.get(url, headers=HEADERS, timeout=15)
 
         if response.status_code != 200:
-            print(f"Skiipping {url} (Status {response.status_code})")
+            print(f"Skipping {url} (Status {response.status_code})")
             return 0, 0
 
         soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Locate all card box structures on the target index page
         card_boxes = soup.find_all("div", class_="card-product")
 
         for card in card_boxes:
             try:
-                # 1. Extract Card Name (Always inside h4 text-primary)
+                # 1. Extract Card Name (Always h4 text-primary)
                 title_element = card.find("h4", class_="text-primary")
                 if not title_element:
                     continue
                 card_name = title_element.text.strip()
 
-                # 2. Extract Card Number (Look for the centered border-dark block text)
+                # 2. Extract Card Number safely
                 number_element = card.find("span", class_="border-dark")
                 if not number_element:
-                    # Fallback to general span search if layout shifts
                     number_element = card.find("span")
-                    if not number_element or "-" not in number_element.text:
+                    if not number_element:
                         continue
                 
                 raw_number = number_element.text.strip().upper().replace(" ", "")
-                
-                # Normalize format to always use hyphens (e.g., EB01-001)
                 if "-" not in raw_number:
                     if raw_number.startswith(("OP", "ST", "EB")) and len(raw_number) >= 7:
                         card_number = f"{raw_number[:4]}-{raw_number[4:]}"
@@ -113,14 +111,14 @@ def process_set(set_code):
                 else:
                     card_number = raw_number
 
-                # 3. Extract Price (Find the strong tag safely anywhere inside the card block)
+                # 3. Extract Price safely
                 price_element = card.find("strong")
                 if not price_element:
                     continue
                 price_text = price_element.text.strip()
                 price_jpy = int("".join(filter(str.isdigit, price_text)))
 
-                # 4. Extract Image URL Layout
+                # 4. Extract Image Link mappings
                 img_url = ""
                 link_element = card.find("a", href=True)
                 if link_element:
@@ -132,48 +130,60 @@ def process_set(set_code):
                         img_url = f"https://card.yuyu-tei.jp/opc/front/{set_code_img}/{image_id}.jpg"
 
                 # =========================================================
-                # 🛠️ EXPLICIT FIELD DATA LOGIC 
+                # 🛠️ UNIVERSAL DUAL-LAYOUT RARITY IDENTIFIER
                 # =========================================================
-                rarity = "UNKNOWN"
+                context_rarity = ""
                 chase_variant = ""
 
-                # Target the exact badge wrapper text (e.g., P-L, L, SEC, P-SEC)
-                rarity_span = card.find("span", class_="text-white")
-                if rarity_span:
-                    rarity = rarity_span.text.strip().upper()
-                
-                # Check Card Name and Image Alt text for Manga/Special Chase tags
+                # Layout Type A: Look upward for the categorical section header (OP sets)
+                parent_section = card.find_parent("div", class_="card-list-box")
+                if parent_section:
+                    header = parent_section.find(["h3", "h4", "h5", "div"], class_="title")
+                    if header:
+                        header_text = header.text.strip().upper()
+                        # Extract the base text descriptor directly out of the header block
+                        context_rarity = header_text.replace("CARD LIST", "").strip()
+
+                # Layout Type B: Check for explicit label text badges (EB/ST sets fallback)
+                if not context_rarity or context_rarity == "UNKNOWN":
+                    rarity_span = card.find("span", class_="text-white")
+                    if rarity_span:
+                        context_rarity = rarity_span.text.strip().upper()
+
+                # Default fallback if both structural layouts missing
+                if not context_rarity:
+                    context_rarity = "C"
+
+                # 5. Extract Custom Variant Strings from Alternate Image Tags
                 img_tag = card.find("img")
                 alt_text = img_tag["alt"].strip().upper() if (img_tag and img_tag.has_attr("alt")) else ""
                 combined_text = f"{card_name.upper()} {alt_text}"
 
-                # Isolate High-Value Super Parallel Chase variations safely
                 if "手配書" in combined_text or "WANTED" in combined_text:
                     chase_variant = "_WANTED"
-                    rarity = "SP"
+                    context_rarity = "SP"
                 elif "レッド" in combined_text or "RED" in combined_text:
                     chase_variant = "_RED_MANGA"
-                    rarity = "P-SEC"
+                    context_rarity = "P-SEC"
                 elif "スーパーパラレル" in combined_text or "SUPER" in combined_text or "コミック" in combined_text or "原作" in combined_text:
                     chase_variant = "_MANGA"
-                    rarity = "P-SEC"
+                    context_rarity = "P-SEC"
+                
+                # Standardize alternative art parallel flags uniformly 
+                elif "パラレル" in combined_text and "P-" not in context_rarity and "SP" not in context_rarity:
+                    if context_rarity in ["SEC", "SR", "R", "UC", "C", "L"]:
+                        context_rarity = f"P-{context_rarity}"
 
-                # 5. Build Bulletproof Non-Colliding ID Keys
+                # 6. Finalize the primary key signatures cleanly
                 if chase_variant:
-                    unique_card_id = f"{card_number}_{rarity}{chase_variant}"
+                    unique_card_id = f"{card_number}_{context_rarity}{chase_variant}"
                 else:
-                    unique_card_id = f"{card_number}_{rarity}"
-
-                # If it's a generic secondary Alternate Art sharing a common parallel rarity key
-                if img_url:
-                    img_id = img_url.split("/")[-1].split(".")[0]
-                    if "P-" in rarity and not chase_variant and not img_id.endswith("101") and not img_id.endswith("100"):
-                        unique_card_id = f"{card_number}_{rarity}_ALT"
+                    unique_card_id = f"{card_number}_{context_rarity}"
 
                 origin_set = card_number.split("-")[0].strip()
                 market_set = set_code.upper().strip()
 
-                # 6. Push Verified Row Elements to Database
+                # 7. Execute transactional write down inside database schema pipeline
                 cursor.execute("""
                     INSERT INTO Cards 
                     (UniqueCardId, CardNumber, CardName, Rarity, SetId, ImageUrl)
@@ -183,130 +193,8 @@ def process_set(set_code):
                         CardName = EXCLUDED.CardName,
                         ImageUrl = EXCLUDED.ImageUrl,
                         Rarity = EXCLUDED.Rarity;
-                """, (unique_card_id, card_number, card_name, rarity, origin_set, img_url))
+                """, (unique_card_id, card_number, card_name, context_rarity, origin_set, img_url))
 
-                cursor.execute("""
-                    INSERT INTO PriceHistory
-                    (UniqueCardId, MarketSet, PriceJPY, RecordedDate)
-                    VALUES (%s, %s, %s, CURRENT_DATE)
-                    ON CONFLICT (UniqueCardId, MarketSet, RecordedDate)
-                    DO UPDATE SET PriceJPY = EXCLUDED.PriceJPY;
-                """, (unique_card_id, market_set, price_jpy))
-
-                local_cards += 1
-                local_prices += 1
-
-            except Exception as e:
-                continue
-            
-            try:
-                title_element = card.find("h4", class_="text-primary")
-                if not title_element:
-                    continue
-                card_name = title_element.text.strip()
-
-                number_element = card.find("span")
-                if not number_element:
-                    continue
-                raw_number = number_element.text.strip().upper().replace(" ", "")
-
-                # Uniform hyphen processing
-                if "-" not in raw_number:
-                    if raw_number.startswith(("OP", "ST", "EB")) and len(raw_number) >= 7:
-                        card_number = f"{raw_number[:4]}-{raw_number[4:]}"
-                    else:
-                        continue 
-                else:
-                    card_number = raw_number
-
-                price_element = card.find("strong")
-                if not price_element:
-                    continue
-                price_text = price_element.text.strip()
-                price_jpy = int("".join(filter(str.isdigit, price_text)))
-
-                img_url = ""
-                link_element = card.find("a", href=True)
-                if link_element:
-                    detail_url = link_element["href"]
-                    parts = detail_url.strip("/").split("/")
-                    if len(parts) >= 5:
-                        set_code_img = parts[-2]
-                        image_id = parts[-1]
-                        img_url = f"https://card.yuyu-tei.jp/opc/front/{set_code_img}/{image_id}.jpg"
-
-                # =========================================================
-                # 🛠️ ULTRA-PRECISE VARIANT & RARITY EXTRACTOR
-                # =========================================================
-                rarity = "C"  # Baseline fallback
-                chase_variant = ""
-
-                # 1. Target the exact HTML rarity badge element used by YuYu-Tei
-                rarity_element = card.find("em", class_="rarity")
-                if rarity_element:
-                    rarity = rarity_element.text.strip().upper()
-                else:
-                    # Alternative check if the wrapper contains rarity class selectors
-                    card_classes = card.get("class", [])
-                    for cls in card_classes:
-                        if cls.startswith("rarity-"):
-                            rarity = cls.split("-")[-1].upper()
-
-                # 2. Check Image Alt Tags for Parallel Types and Special Chases
-                img_tag = card.find("img")
-                if img_tag and img_tag.has_attr("alt"):
-                    alt_text = img_tag["alt"].strip().upper()
-
-                    # Detect Wanted Poster style frames (手配書 / WANTED)
-                    if "手配書" in alt_text or "WANTED" in alt_text:
-                        chase_variant = "_WANTED"
-                        rarity = "SP"
-
-                    # Detect Red Super Parallel (レッドスーパーパラレル / 赤)
-                    elif "レッド" in alt_text or "RED" in alt_text:
-                        chase_variant = "_RED_MANGA"
-                        rarity = "P-SEC"
-
-                    # Detect Standard Super Parallel Manga (スーパーパラレル / コミック / 原作)
-                    elif "スーパーパラレル" in alt_text or "SUPER" in alt_text or "コミック" in alt_text or "原作" in alt_text:
-                        chase_variant = "_MANGA"
-                        rarity = "P-SEC"
-
-                    # Standardize parallel indicator notation
-                    elif "パラレル" in alt_text and "P-" not in rarity and "SP" not in rarity:
-                        if rarity in ["SEC", "SR", "R", "UC", "C", "L"]:
-                            rarity = f"P-{rarity}"
-                        else:
-                            rarity += "_PARALLEL"
-
-                # 3. Handle specific Alt Art separations that share the generic P-SEC tag
-                if chase_variant:
-                    unique_card_id = f"{card_number}_{rarity}{chase_variant}"
-                else:
-                    unique_card_id = f"{card_number}_{rarity}"
-
-                if img_url:
-                    img_id = img_url.split("/")[-1].split(".")[0]
-                    # If it's an alternate art sharing the base P-SEC code without being manga, suffix it
-                    if rarity == "P-SEC" and not chase_variant and not img_id.endswith("101"):
-                        unique_card_id = f"{card_number}_{rarity}_ALT"
-
-                origin_set = card_number.split("-")[0].strip()
-                market_set = set_code.upper().strip()
-
-                # 1. Store the unique card details safely
-                cursor.execute("""
-                    INSERT INTO Cards 
-                    (UniqueCardId, CardNumber, CardName, Rarity, SetId, ImageUrl)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (UniqueCardId)
-                    DO UPDATE SET
-                        CardName = EXCLUDED.CardName,
-                        ImageUrl = EXCLUDED.ImageUrl,
-                        Rarity = EXCLUDED.Rarity;
-                """, (unique_card_id, card_number, card_name, rarity, origin_set, img_url))
-
-                # 2. Store the pricing tracking log
                 cursor.execute("""
                     INSERT INTO PriceHistory
                     (UniqueCardId, MarketSet, PriceJPY, RecordedDate)
@@ -330,7 +218,7 @@ def process_set(set_code):
     except Exception as e:
         print(f"Thread failed for set {set_code}: {e}")
         return 0, 0
-
+    
 # ==============================
 # MAIN RUNNER EXECUTION 
 # ==============================
