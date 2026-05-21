@@ -10,15 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ==============================
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# ==============================
-# CLOUD DATABASE CONNECTION
-# ==============================
-DATABASE_URL = os.getenv("DATABASE_URL")
-
 def create_connection():
     # SAFETY CATCH FOR RENDER BUILD PHASE:
-    # If the database URL environment variable isn't present yet, 
-    # return a dummy connection mock or raise an error ONLY when actually called.
     if not DATABASE_URL:
         print("⚠️ DATABASE_URL is missing. (This is normal if Render is running a Build Check)")
         return None
@@ -29,8 +22,6 @@ def initialize_database():
         print("Initializing cloud database infrastructure...")
         conn = create_connection()
         
-        # If we are in the build phase and conn is None, exit gracefully with 0 (Success) 
-        # so Render finishes building without crashing!
         if conn is None:
             print("Plugged build-phase safety bypass. Database initialization skipped during build.")
             return
@@ -61,7 +52,6 @@ def initialize_database():
         print("Successfully connected and verified Cloud PostgreSQL schemas!")
     except Exception as e:
         print(f"Cloud Database initialization failed: {e}")
-        # Only crash if it's a real run error, otherwise pass
         if DATABASE_URL:
             exit(1)
 
@@ -69,7 +59,7 @@ def initialize_database():
 # CONFIG
 # ==============================
 BASE_URL = "https://yuyu-tei.jp/sell/opc/s/"
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
 # ==============================
 # MULTITHREADED SCRAPING
@@ -84,6 +74,7 @@ def process_set(set_code):
         cursor = conn.cursor()
 
         print(f"Processing set: {set_code.upper()}")
+        time.sleep(0.5)  # Gentle pacing cushion to prevent rate limiting
 
         url = f"{BASE_URL}{set_code}"
         response = requests.get(url, headers=HEADERS, timeout=15)
@@ -169,15 +160,11 @@ def process_set(set_code):
                         rarity = "P"
 
                     # 3. ADVANCED JPN TEXT MATCHING FOR MANGA & SPECIAL VARIANTS
-                    # Detects standard Comic/Manga background
                     if "コミック" in alt_text or "原作" in alt_text:
                         chase_variant = "_MANGA"
                     
-                    # Detects Red background variations specifically (赤 = Red)
                     if "赤" in alt_text or "RED" in alt_text:
                         chase_variant = "_RED_MANGA"
-                    
-                    # Detects other special anniversary/event frames if applicable
                     elif "周年" in alt_text or "ANNIVERSARY" in alt_text:
                         chase_variant = "_ANNIV"
 
@@ -185,13 +172,16 @@ def process_set(set_code):
                 if is_parallel and "P-" not in rarity and "SP" not in rarity:
                     rarity += "_PARALLEL"
 
-                # If a special chase variant was flagged, append it onto our key!
                 if chase_variant:
                     unique_card_id = f"{card_number}_{rarity}{chase_variant}"
                 else:
                     unique_card_id = f"{card_number}_{rarity}"
 
-                # 1. Store the unique card details (Unique to the physical card cardnumber + rarity)
+                # FIX: Explicitly define origin_set and market_set before SQL executions
+                origin_set = card_number.split("-")[0].strip()
+                market_set = set_code.upper().strip()
+
+                # 1. Store the unique card details
                 cursor.execute("""
                     INSERT INTO Cards 
                     (UniqueCardId, CardNumber, CardName, Rarity, SetId, ImageUrl)
@@ -202,7 +192,7 @@ def process_set(set_code):
                         ImageUrl = EXCLUDED.ImageUrl;
                 """, (unique_card_id, card_number, card_name, rarity, origin_set, img_url))
 
-                # 2. Store the price under the current Market Set list page it was found on!
+                # 2. Store the price under the current Market Set list page
                 cursor.execute("""
                     INSERT INTO PriceHistory
                     (UniqueCardId, MarketSet, PriceJPY, RecordedDate)
@@ -214,7 +204,9 @@ def process_set(set_code):
                 local_cards += 1
                 local_prices += 1
 
-            except Exception:
+            except Exception as e:
+                # Useful to keep an internal log stream during development anomalies
+                # print(f"Card error: {e}")
                 continue
 
         conn.commit()
@@ -234,19 +226,16 @@ if __name__ == "__main__":
     # 1. Initialize Tables Safely
     initialize_database()
 
-    # ==============================
-    # UPGRADED TARGET SET GENERATOR (OP15 + EB04 + ST30)
-    # ==============================
     print("Pre-building safety target list for all One Piece TCG sets...")
     baseline_sets = []
     
-    # 1. Main Booster Sets (Now expanded up through OP-15!)
+    # 1. Main Booster Sets (OP-01 through OP-15)
     baseline_sets += [f"op{str(i).zfill(2)}" for i in range(1, 16)] 
     
-    # 2. Extra Boosters (EB-01 up through the latest EB-04)
+    # 2. Extra Boosters (EB-01 through EB-04)
     baseline_sets += [f"eb{str(i).zfill(2)}" for i in range(1, 5)]   
     
-    # 3. Starter Decks (From the classic ST-01 up to the current ST-30 flagship releases)
+    # 3. Starter Decks (ST-01 through ST-30)
     baseline_sets += [f"st{str(i).zfill(2)}" for i in range(1, 31)]  
 
     # ==============================
@@ -267,7 +256,6 @@ if __name__ == "__main__":
                         if set_code not in SETS:
                             SETS.append(set_code)
 
-        # Merge baseline overrides into the scraping queue to catch hidden/archived sets safely
         for b_set in baseline_sets:
             if b_set not in SETS:
                 SETS.append(b_set)
@@ -288,7 +276,6 @@ if __name__ == "__main__":
     cards_processed = 0
     prices_logged = 0
 
-    # Max workers kept at 3 to prevent pool drops on your cloud database instance
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {executor.submit(process_set, set_code): set_code for set_code in SETS}
         for future in as_completed(futures):
