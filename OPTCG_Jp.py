@@ -205,10 +205,9 @@ def process_set(set_code):
                         context_rarity = f"P-{context_rarity}"
 
                 # =========================================================
-                # 🛠️ 5. DYNAMIC HIGH-RES IMAGE ID DISAMBIGUATION KEY GENERATOR
+                # 🛠️ 5. UNIVERSAL HIGH-RES IMAGE ID DISAMBIGUATION ENGINE
                 # =========================================================
-                # Extract YuYu-Tei's unique asset ID integer from the image URL filename
-                # Example: https://card.yuyu-tei.jp/opc/front/op13/10152.jpg -> 10152
+                # Extract YuYu-Tei's unique structural asset ID from the high-res filename
                 image_asset_id = ""
                 if img_url:
                     try:
@@ -216,7 +215,7 @@ def process_set(set_code):
                     except Exception:
                         image_asset_id = ""
 
-                # Append special variant labels for clarity based on text keywords
+                # Extract Special Chase Labels based on item card name attributes
                 if "手配書" in combined_text or "WANTED" in combined_text:
                     chase_variant = "_WANTED"
                     context_rarity = "SP"
@@ -229,13 +228,22 @@ def process_set(set_code):
                 else:
                     chase_variant = ""
 
-                # Auto-append parallel tags to common base card values missing the explicit prefix
-                if "パラレル" in combined_text and "P-" not in context_rarity and context_rarity not in ["SP", "L", "P-L"]:
-                    if context_rarity in ["SEC", "SR", "R", "UC", "C"]:
-                        context_rarity = f"P-{context_rarity}"
+                # FIXED: Ensure parallel flags only transform the ACTUAL base card rarity mapping
+                if "パラレル" in combined_text and "P-" not in context_rarity and context_rarity not in ["SP", "L", "P-L", "C", "UNKNOWN"]:
+                    context_rarity = f"P-{context_rarity}"
+                elif "パラレル" in combined_text and context_rarity == "C" and "P-C" not in combined_text:
+                    # Double-check raw container text to avoid mislabeling Leaders or high rarities as standard common parallels
+                    if "P-L" in combined_text:
+                        context_rarity = "P-L"
+                    elif "P-SEC" in combined_text:
+                        context_rarity = "P-SEC"
+                    elif "P-SR" in combined_text:
+                        context_rarity = "P-SR"
+                    elif "P-R" in combined_text:
+                        context_rarity = "P-R"
 
-                # Generate a globally unique ID using the base properties and the unique asset id
-                # Results in clean keys like: OP05-119_SP_10034, OP05-119_SP_WANTED_10035
+                # UNIVERSAL ID GENERATOR: Applies unique image asset IDs across ALL variations (SEC, P-SEC, SP, etc.)
+                # Prevents any multi-art duplicate entries from overwriting one another in your database.
                 unique_card_id = f"{card_number}_{context_rarity}{chase_variant}{image_asset_id}"
 
                 origin_set = card_number.split("-")[0].strip()
